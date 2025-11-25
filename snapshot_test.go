@@ -6,8 +6,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/akabio/expect"
-	"github.com/akabio/expect/internal/test"
+	"github.com/byte-wright/expect"
+	"github.com/byte-wright/expect/internal/test"
 )
 
 var sampleImage = func() image.Image {

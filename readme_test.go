@@ -3,8 +3,8 @@ package expect_test
 import (
 	"testing"
 
-	"github.com/akabio/expect"
-	"github.com/akabio/expect/internal/test"
+	"github.com/byte-wright/expect"
+	"github.com/byte-wright/expect/internal/test"
 )
 
 func TestReadmeToBeString(t *testing.T) {

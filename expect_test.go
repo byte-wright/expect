@@ -4,8 +4,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/akabio/expect"
-	"github.com/akabio/expect/internal/test"
+	"github.com/byte-wright/expect"
+	"github.com/byte-wright/expect/internal/test"
 )
 
 func TestExample(t *testing.T) {

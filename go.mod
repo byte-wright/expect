@@ -1,4 +1,4 @@
-module github.com/akabio/expect
+module github.com/byte-wright/expect
 
 go 1.18
 
