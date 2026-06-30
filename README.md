@@ -76,7 +76,32 @@ Asserts that the value is not deeply equal to the provided value.
 
 ### ToBeAbout
 
-Asserts that the number is about expected value with a margin of error of provided delta.
+Asserts that the value deeply equals the expected value like `ToBe`, except that numeric,
+`time.Time` and `time.Duration` leaves only need to be within the deltas given as options.
+The structural shape and every other leaf must still match exactly. Without options it
+behaves like an exact match.
+
+```go
+expect.Value(t, "liters", 1.92).ToBeAbout(2.0, expect.FloatDelta(0.1))
+
+expect.Value(t, "measurement", got).ToBeAbout(want,
+    expect.FloatDelta(0.01),
+    expect.IntDelta(5),
+    expect.TimeDelta(time.Second),
+    expect.DurationDelta(10*time.Millisecond),
+)
+// on mismatch it points at the offending path:
+// expected measurement.Readings[1] to be 2±0.1 but it is 2.5
+```
+
+The available options are `FloatDelta` (float32/float64), `IntDelta` (signed and unsigned
+integers), `TimeDelta` (time.Time) and `DurationDelta` (time.Duration). A leaf with no
+matching option, or any non-numeric leaf, must match exactly.
+
+`time.Time` values are compared by instant (`a.Sub(b)`), not field by field, so the
+location/monotonic-clock pitfall described under `ToBe` does not apply. Tolerances reach
+values through exported fields, slices, arrays and maps; unexported leaves are compared
+exactly.
 
 ### ToBeType
 
