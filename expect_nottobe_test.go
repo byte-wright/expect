@@ -28,3 +28,28 @@ func TestFailNotToBeSlice(t *testing.T) {
 - 1
 but it is`)
 }
+
+func TestNotToBeNil(t *testing.T) {
+	expect.Value(t, "pointer", &struct{}{}).NotToBe(nil)
+	expect.Value(t, "list", []int{}).NotToBe(nil)
+}
+
+func TestFailNotToBeNil(t *testing.T) {
+	type user struct{}
+
+	var (
+		u    *user
+		list []int
+		dict map[string]int
+	)
+
+	l := test.New(t, func(t expect.Test) {
+		expect.Value(t, "user", u).NotToBe(nil)
+		expect.Value(t, "list", list).NotToBe(nil)
+		expect.Value(t, "map", dict).NotToBe(nil)
+	})
+	l.ExpectMessages().ToCount(3)
+	l.ExpectMessage(0).ToBe("expected user to NOT be nil but it is")
+	l.ExpectMessage(1).ToBe("expected list to NOT be nil but it is")
+	l.ExpectMessage(2).ToBe("expected map to NOT be nil but it is")
+}

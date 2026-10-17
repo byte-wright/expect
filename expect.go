@@ -157,7 +157,11 @@ func (e Val) ToContain(expected interface{}) Val {
 func (e Val) NotToBe(unExpected interface{}) Val {
 	e.t.Helper()
 
-	if reflect.DeepEqual(e.value, unExpected) {
+	if !sameType(e.value, unExpected) {
+		return e
+	}
+
+	if (isNil(e.value) && isNil(unExpected)) || reflect.DeepEqual(e.value, unExpected) {
 		x, p := formatOne(unExpected)
 		nl := presentations[p]
 		e.t.Errorf("expected %v to NOT be%v%v%vbut it is", e.name, nl, x, nl)

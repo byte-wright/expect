@@ -3,8 +3,8 @@ package expect
 import "reflect"
 
 func sameType(a, b interface{}) bool {
-	if isNil(a) && isNil(b) {
-		return true
+	if a == nil || b == nil {
+		return isNil(a) && isNil(b)
 	}
 
 	at := reflect.TypeOf(a)

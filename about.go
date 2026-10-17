@@ -88,7 +88,7 @@ func (c aboutConfig) compare(path string, exp, act reflect.Value) (string, bool)
 	if exp.Type() == timeType && exp.CanInterface() {
 		et := exp.Interface().(time.Time)
 		at := act.Interface().(time.Time)
-		if d := absDuration(at.Sub(et)); d > c.timeDelta {
+		if !withinDelta(absDiffTime(et, at), int64(c.timeDelta)) {
 			return fmt.Sprintf("expected %s to be %s±%v but it is %s", path,
 				et.Format(time.RFC3339Nano), c.timeDelta, at.Format(time.RFC3339Nano)), false
 		}
@@ -100,7 +100,7 @@ func (c aboutConfig) compare(path string, exp, act reflect.Value) (string, bool)
 	// otherwise the duration delta would leak onto every int64 value.
 	if exp.Type() == durationType {
 		ed, ad := time.Duration(exp.Int()), time.Duration(act.Int())
-		if d := absDuration(ad - ed); d > c.durationDelta {
+		if !withinDelta(absDiffInt64(int64(ed), int64(ad)), int64(c.durationDelta)) {
 			return fmt.Sprintf("expected %s to be %v±%v but it is %v", path, ed, c.durationDelta, ad), false
 		}
 
@@ -110,7 +110,7 @@ func (c aboutConfig) compare(path string, exp, act reflect.Value) (string, bool)
 	switch exp.Kind() {
 	case reflect.Float32, reflect.Float64:
 		ef, af := exp.Float(), act.Float()
-		if math.Abs(af-ef) > c.floatDelta {
+		if !withinFloatDelta(ef, af, c.floatDelta) {
 			return fmt.Sprintf("expected %s to be %v±%v but it is %v", path, ef, c.floatDelta, af), false
 		}
 
@@ -118,7 +118,7 @@ func (c aboutConfig) compare(path string, exp, act reflect.Value) (string, bool)
 
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		ei, ai := exp.Int(), act.Int()
-		if absInt64(ai-ei) > c.intDelta {
+		if !withinDelta(absDiffInt64(ei, ai), c.intDelta) {
 			return fmt.Sprintf("expected %s to be %v±%v but it is %v", path, ei, c.intDelta, ai), false
 		}
 
@@ -126,7 +126,7 @@ func (c aboutConfig) compare(path string, exp, act reflect.Value) (string, bool)
 
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
 		eu, au := exp.Uint(), act.Uint()
-		if absDiffUint64(eu, au) > uint64(c.intDelta) {
+		if !withinDelta(absDiffUint64(eu, au), c.intDelta) {
 			return fmt.Sprintf("expected %s to be %v±%v but it is %v", path, eu, c.intDelta, au), false
 		}
 
@@ -222,20 +222,37 @@ func formatV(v reflect.Value) string {
 	return fmt.Sprintf("%v", v)
 }
 
-func absDuration(d time.Duration) time.Duration {
-	if d < 0 {
-		return -d
+func withinFloatDelta(exp, act, delta float64) bool {
+	// Inf-Inf is NaN, so equal infinities need the explicit equality check.
+	if exp == act || (math.IsNaN(exp) && math.IsNaN(act)) {
+		return true
 	}
 
-	return d
+	return math.Abs(act-exp) <= delta
 }
 
-func absInt64(v int64) int64 {
-	if v < 0 {
-		return -v
+func withinDelta(diff uint64, delta int64) bool {
+	if delta < 0 {
+		delta = 0
 	}
 
-	return v
+	return diff <= uint64(delta)
+}
+
+func absDiffTime(a, b time.Time) uint64 {
+	if a.After(b) {
+		return uint64(a.Sub(b))
+	}
+
+	return uint64(b.Sub(a))
+}
+
+func absDiffInt64(a, b int64) uint64 {
+	if a > b {
+		return uint64(a) - uint64(b)
+	}
+
+	return uint64(b) - uint64(a)
 }
 
 func absDiffUint64(a, b uint64) uint64 {

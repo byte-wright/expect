@@ -72,7 +72,8 @@ Asserts that the string begins with the provided string or ends with it.
 
 ### NotToBe
 
-Asserts that the value is not deeply equal to the provided value.
+Asserts that the value is not deeply equal to the provided value. It uses the same nil
+handling as `ToBe`, so `NotToBe(nil)` fails for a nil pointer, slice, map or channel.
 
 ### ToBeAbout
 
@@ -96,7 +97,7 @@ expect.Value(t, "measurement", got).ToBeAbout(want,
 
 The available options are `FloatDelta` (float32/float64), `IntDelta` (signed and unsigned
 integers), `TimeDelta` (time.Time) and `DurationDelta` (time.Duration). A leaf with no
-matching option, or any non-numeric leaf, must match exactly.
+matching option, or any non-numeric leaf, must match exactly. NaN only matches NaN.
 
 `time.Time` values are compared by instant (`a.Sub(b)`), not field by field, so the
 location/monotonic-clock pitfall described under `ToBe` does not apply. Tolerances reach

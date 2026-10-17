@@ -147,3 +147,10 @@ func TestNilTypeToBeNil(t *testing.T) {
 func TestNilValueToBeNil(t *testing.T) {
 	expect.Value(t, "vsv", nil).ToBe(nil)
 }
+
+func TestFailToBeNilOfOtherType(t *testing.T) {
+	l := test.New(t, func(t expect.Test) {
+		expect.Value(t, "list", []int(nil)).ToBe(map[string]int(nil))
+	})
+	l.ExpectMessage(0).ToBe("expected list to be of type map[string]int but it is of type []int")
+}
