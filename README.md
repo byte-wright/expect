@@ -102,7 +102,8 @@ matching option, or any non-numeric leaf, must match exactly. NaN only matches N
 `time.Time` values are compared by instant (`a.Sub(b)`), not field by field, so the
 location/monotonic-clock pitfall described under `ToBe` does not apply. Tolerances reach
 values through exported fields, slices, arrays and maps; unexported leaves are compared
-exactly.
+exactly. Cyclic structures, such as a ring of nodes or children pointing back to their
+parent, are supported.
 
 ### ToBeType
 

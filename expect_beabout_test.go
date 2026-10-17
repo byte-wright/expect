@@ -164,3 +164,79 @@ func TestFailToBeAboutType(t *testing.T) {
 	})
 	l.ExpectMessage(0).ToBe("expected liters to be of type float32 but it is of type float64")
 }
+
+type node struct {
+	Value float64
+	Next  *node
+}
+
+func ring(values ...float64) *node {
+	first := &node{Value: values[0]}
+	last := first
+
+	for _, v := range values[1:] {
+		last.Next = &node{Value: v}
+		last = last.Next
+	}
+
+	last.Next = first
+
+	return first
+}
+
+func TestToBeAboutCycle(t *testing.T) {
+	expect.Value(t, "ring", ring(1.01, 1.99)).ToBeAbout(ring(1, 2), expect.FloatDelta(0.1))
+}
+
+func TestFailToBeAboutCycle(t *testing.T) {
+	l := test.New(t, func(t expect.Test) {
+		expect.Value(t, "ring", ring(1, 2.5)).ToBeAbout(ring(1, 2), expect.FloatDelta(0.1))
+		expect.Value(t, "ring", ring(1, 2, 3)).ToBeAbout(ring(1, 2), expect.FloatDelta(0.1))
+	})
+	l.ExpectMessage(0).ToBe("expected ring.Next.Value to be 2±0.1 but it is 2.5")
+	l.ExpectMessage(1).ToBe("expected ring.Next.Next.Value to be 1±0.1 but it is 3")
+}
+
+func selfContaining(ratio float64) (map[string]interface{}, []interface{}) {
+	dict := map[string]interface{}{"ratio": ratio}
+	dict["self"] = dict
+
+	list := []interface{}{ratio, nil}
+	list[1] = list
+
+	return dict, list
+}
+
+func TestToBeAboutSelfContaining(t *testing.T) {
+	wantDict, wantList := selfContaining(0.5)
+	gotDict, gotList := selfContaining(0.51)
+
+	expect.Value(t, "dict", gotDict).ToBeAbout(wantDict, expect.FloatDelta(0.1))
+	expect.Value(t, "list", gotList).ToBeAbout(wantList, expect.FloatDelta(0.1))
+}
+
+func TestFailToBeAboutSelfContaining(t *testing.T) {
+	wantDict, wantList := selfContaining(0.5)
+	gotDict, gotList := selfContaining(0.7)
+
+	l := test.New(t, func(t expect.Test) {
+		expect.Value(t, "dict", gotDict).ToBeAbout(wantDict, expect.FloatDelta(0.1))
+		expect.Value(t, "list", gotList).ToBeAbout(wantList, expect.FloatDelta(0.1))
+	})
+	l.ExpectMessage(0).ToBe("expected dict['ratio'] to be 0.5±0.1 but it is 0.7")
+	l.ExpectMessage(1).ToBe("expected list[0] to be 0.5±0.1 but it is 0.7")
+}
+
+func TestFailToBeAboutSlicesOfOneArray(t *testing.T) {
+	type window struct {
+		Head, All []float64
+	}
+
+	want := []float64{1, 2}
+	got := []float64{1, 5}
+
+	l := test.New(t, func(t expect.Test) {
+		expect.Value(t, "window", window{Head: got[:1], All: got}).ToBeAbout(window{Head: want[:1], All: want})
+	})
+	l.ExpectMessage(0).ToBe("expected window.All[1] to be 2±0 but it is 5")
+}

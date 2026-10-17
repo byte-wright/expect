@@ -15,6 +15,13 @@ type aboutConfig struct {
 	intDelta      int64
 	timeDelta     time.Duration
 	durationDelta time.Duration
+	visited       map[visit]bool
+}
+
+type visit struct {
+	typ      reflect.Type
+	exp, act uintptr
+	length   int
 }
 
 // FloatDelta sets the maximum allowed absolute difference for float32/float64 leaves.
@@ -63,7 +70,7 @@ func (e Val) ToBeAbout(expected interface{}, opts ...AboutOption) Val {
 		return e
 	}
 
-	cfg := aboutConfig{}
+	cfg := aboutConfig{visited: map[visit]bool{}}
 	for _, o := range opts {
 		o(&cfg)
 	}
@@ -81,6 +88,12 @@ func (e Val) ToBeAbout(expected interface{}, opts ...AboutOption) Val {
 func (c aboutConfig) compare(path string, exp, act reflect.Value) (string, bool) {
 	if exp.Type() != act.Type() {
 		return fmt.Sprintf("expected %s to be of type %v but it is of type %v", path, exp.Type(), act.Type()), false
+	}
+
+	// A pair reached again is either still being compared further up a cycle or has
+	// already passed, since the walk stops at the first difference.
+	if c.revisited(exp, act) {
+		return "", true
 	}
 
 	// time.Time is a struct, so it has to be caught before the struct branch would
@@ -192,6 +205,28 @@ func (c aboutConfig) compare(path string, exp, act reflect.Value) (string, bool)
 
 		return "", true
 	}
+}
+
+func (c aboutConfig) revisited(exp, act reflect.Value) bool {
+	key := visit{typ: exp.Type()}
+
+	switch exp.Kind() {
+	case reflect.Ptr, reflect.Map:
+		key.exp, key.act = exp.Pointer(), act.Pointer()
+	case reflect.Slice:
+		// s[:1] and s[:2] share their pointer.
+		key.exp, key.act, key.length = exp.Pointer(), act.Pointer(), exp.Len()
+	default:
+		return false
+	}
+
+	if c.visited[key] {
+		return true
+	}
+
+	c.visited[key] = true
+
+	return false
 }
 
 // directEqual compares leaf values that carry no tolerance (strings, bools, complex,
