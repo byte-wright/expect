@@ -15,13 +15,19 @@ type aboutConfig struct {
 	intDelta      int64
 	timeDelta     time.Duration
 	durationDelta time.Duration
-	visited       map[visit]bool
+}
+
+type aboutWalk struct {
+	deltas  aboutConfig
+	visited map[visit]bool
 }
 
 type visit struct {
 	typ      reflect.Type
 	exp, act uintptr
 	length   int
+	// A pointer reached from an unexported field is compared without deltas.
+	unexported bool
 }
 
 // FloatDelta sets the maximum allowed absolute difference for float32/float64 leaves.
@@ -56,8 +62,9 @@ var (
 // by the options. Every other leaf and the structural shape must still match exactly.
 // Without options it behaves like an exact match.
 //
-// Tolerances apply to top-level values and to values reachable through exported
-// fields, slices, arrays and maps. Unexported leaves are compared exactly.
+// The deltas apply to the value itself and to exported fields, list items and map
+// values at any depth, also inside unexported fields. Only a leaf that is itself an
+// unexported field is compared exactly.
 func (e Val) ToBeAbout(expected interface{}, opts ...AboutOption) Val {
 	e.t.Helper()
 
@@ -70,12 +77,13 @@ func (e Val) ToBeAbout(expected interface{}, opts ...AboutOption) Val {
 		return e
 	}
 
-	cfg := aboutConfig{visited: map[visit]bool{}}
+	cfg := aboutConfig{}
 	for _, o := range opts {
 		o(&cfg)
 	}
 
-	if msg, ok := cfg.compare(e.name, reflect.ValueOf(expected), reflect.ValueOf(e.value)); !ok {
+	w := aboutWalk{deltas: cfg, visited: map[visit]bool{}}
+	if msg, ok := w.compare(e.name, reflect.ValueOf(expected), reflect.ValueOf(e.value), false); !ok {
 		e.t.Errorf("%s", msg)
 	}
 
@@ -85,20 +93,25 @@ func (e Val) ToBeAbout(expected interface{}, opts ...AboutOption) Val {
 // compare walks expected (exp) and actual (act) in lock-step and returns a message
 // describing the first difference together with false, or an empty message and true
 // when everything is within tolerance.
-func (c aboutConfig) compare(path string, exp, act reflect.Value) (string, bool) {
+func (w aboutWalk) compare(path string, exp, act reflect.Value, unexported bool) (string, bool) {
 	if exp.Type() != act.Type() {
 		return fmt.Sprintf("expected %s to be of type %v but it is of type %v", path, exp.Type(), act.Type()), false
 	}
 
 	// A pair reached again is either still being compared further up a cycle or has
 	// already passed, since the walk stops at the first difference.
-	if c.revisited(exp, act) {
+	if w.revisited(exp, act, unexported) {
 		return "", true
+	}
+
+	c := w.deltas
+	if unexported {
+		c = aboutConfig{}
 	}
 
 	// time.Time is a struct, so it has to be caught before the struct branch would
 	// recurse into its (unexported, location/monotonic carrying) fields.
-	if exp.Type() == timeType && exp.CanInterface() {
+	if exp.Type() == timeType {
 		et := exp.Interface().(time.Time)
 		at := act.Interface().(time.Time)
 		if !withinDelta(absDiffTime(et, at), int64(c.timeDelta)) {
@@ -154,12 +167,23 @@ func (c aboutConfig) compare(path string, exp, act reflect.Value) (string, bool)
 			return "", true
 		}
 
-		return c.compare(path, exp.Elem(), act.Elem())
+		return w.compare(path, exp.Elem(), act.Elem(), unexported)
 
 	case reflect.Struct:
+		// Interface() refuses values read through unexported fields, but the time and
+		// leaf comparisons need it. Reading such fields through their address avoids
+		// that, and needs an addressable struct.
+		exp, act = addressable(exp), addressable(act)
+
 		for i := 0; i < exp.NumField(); i++ {
-			name := exp.Type().Field(i).Name
-			if msg, ok := c.compare(path+"."+name, exp.Field(i), act.Field(i)); !ok {
+			field := exp.Type().Field(i)
+			ef, af := exp.Field(i), act.Field(i)
+
+			if !field.IsExported() {
+				ef, af = export(ef), export(af)
+			}
+
+			if msg, ok := w.compare(path+"."+field.Name, ef, af, !field.IsExported()); !ok {
 				return msg, false
 			}
 		}
@@ -172,7 +196,7 @@ func (c aboutConfig) compare(path string, exp, act reflect.Value) (string, bool)
 		}
 
 		for i := 0; i < exp.Len(); i++ {
-			if msg, ok := c.compare(fmt.Sprintf("%s[%d]", path, i), exp.Index(i), act.Index(i)); !ok {
+			if msg, ok := w.compare(fmt.Sprintf("%s[%d]", path, i), exp.Index(i), act.Index(i), false); !ok {
 				return msg, false
 			}
 		}
@@ -191,7 +215,7 @@ func (c aboutConfig) compare(path string, exp, act reflect.Value) (string, bool)
 				return fmt.Sprintf("expected %s to have key %v but it does not", path, formatV(iter.Key())), false
 			}
 
-			if msg, ok := c.compare(fmt.Sprintf("%s[%v]", path, formatV(iter.Key())), iter.Value(), av); !ok {
+			if msg, ok := w.compare(fmt.Sprintf("%s[%v]", path, formatV(iter.Key())), iter.Value(), av, false); !ok {
 				return msg, false
 			}
 		}
@@ -199,7 +223,7 @@ func (c aboutConfig) compare(path string, exp, act reflect.Value) (string, bool)
 		return "", true
 
 	default:
-		if !directEqual(exp, act) {
+		if !reflect.DeepEqual(exp.Interface(), act.Interface()) {
 			return fmt.Sprintf("expected %s to be %v but it is %v", path, formatV(exp), formatV(act)), false
 		}
 
@@ -207,8 +231,8 @@ func (c aboutConfig) compare(path string, exp, act reflect.Value) (string, bool)
 	}
 }
 
-func (c aboutConfig) revisited(exp, act reflect.Value) bool {
-	key := visit{typ: exp.Type()}
+func (w aboutWalk) revisited(exp, act reflect.Value, unexported bool) bool {
+	key := visit{typ: exp.Type(), unexported: unexported}
 
 	switch exp.Kind() {
 	case reflect.Ptr, reflect.Map:
@@ -220,33 +244,28 @@ func (c aboutConfig) revisited(exp, act reflect.Value) bool {
 		return false
 	}
 
-	if c.visited[key] {
+	if w.visited[key] {
 		return true
 	}
 
-	c.visited[key] = true
+	w.visited[key] = true
 
 	return false
 }
 
-// directEqual compares leaf values that carry no tolerance (strings, bools, complex,
-// channels, funcs, ...). It prefers reflect.DeepEqual but stays usable on unexported
-// fields, where Interface() would panic.
-func directEqual(exp, act reflect.Value) bool {
-	if exp.CanInterface() && act.CanInterface() {
-		return reflect.DeepEqual(exp.Interface(), act.Interface())
+func addressable(v reflect.Value) reflect.Value {
+	if v.CanAddr() {
+		return v
 	}
 
-	switch exp.Kind() {
-	case reflect.String:
-		return exp.String() == act.String()
-	case reflect.Bool:
-		return exp.Bool() == act.Bool()
-	case reflect.Complex64, reflect.Complex128:
-		return exp.Complex() == act.Complex()
-	default:
-		return fmt.Sprintf("%v", exp) == fmt.Sprintf("%v", act)
-	}
+	copied := reflect.New(v.Type()).Elem()
+	copied.Set(v)
+
+	return copied
+}
+
+func export(v reflect.Value) reflect.Value {
+	return reflect.NewAt(v.Type(), v.Addr().UnsafePointer()).Elem()
 }
 
 func formatV(v reflect.Value) string {
