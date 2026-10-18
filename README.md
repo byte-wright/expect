@@ -77,10 +77,9 @@ handling as `ToBe`, so `NotToBe(nil)` fails for a nil pointer, slice, map or cha
 
 ### ToBeAbout
 
-Asserts that the value deeply equals the expected value like `ToBe`, except that numeric,
-`time.Time` and `time.Duration` leaves only need to be within the deltas given as options.
-The structural shape and every other leaf must still match exactly. Without options it
-behaves like an exact match.
+Asserts that the value deeply equals the expected value exactly like `ToBe`, except that
+values of a type given as an option only need to be within that delta. Without options it
+behaves exactly like `ToBe`.
 
 ```go
 expect.Value(t, "liters", 1.92).ToBeAbout(2.0, expect.FloatDelta(0.1))
@@ -95,15 +94,24 @@ expect.Value(t, "measurement", got).ToBeAbout(want,
 // expected measurement.Readings[1] to be 2±0.1 but it is 2.5
 ```
 
-The available options are `FloatDelta` (float32/float64), `IntDelta` (signed and unsigned
-integers), `TimeDelta` (time.Time) and `DurationDelta` (time.Duration). A leaf with no
-matching option, or any non-numeric leaf, must match exactly. NaN only matches NaN.
+The options apply to exported fields and to the elements of slices, arrays and maps at any
+depth, also through pointers and interfaces. Only a value held by an unexported field is
+compared exactly, like map keys and every type without an option.
 
-`time.Time` values are compared by instant (`a.Sub(b)`), not field by field, so the
-location/monotonic-clock pitfall described under `ToBe` does not apply. Tolerances reach
-values through exported fields, slices, arrays and maps; unexported leaves are compared
-exactly. Cyclic structures, such as a ring of nodes or children pointing back to their
-parent, are supported.
+- `FloatDelta` sets the maximum allowed absolute difference for float32 and float64 values.
+  NaN never matches, as in `ToBe`.
+- `IntDelta` sets the maximum allowed absolute difference for integers of every size: int,
+  int8, int16, int32 (rune), int64, uint, uint8 (byte), uint16, uint32, uint64 and uintptr.
+  Named integer types such as enums get the delta too: with `IntDelta(5)`, `time.June`
+  matches `time.January`. The only exception is `time.Duration`, which uses
+  `DurationDelta`.
+- `TimeDelta` sets the maximum allowed absolute difference for time.Time values. Times are
+  then compared by instant (`a.Sub(b)`), so location and monotonic clock reading are
+  ignored, even with a delta of 0. Without it, times are compared like `ToBe` does.
+- `DurationDelta` sets the maximum allowed absolute difference for time.Duration values.
+
+Cyclic structures, such as a ring of nodes or children pointing back to their parent, are
+supported.
 
 ### ToBeType
 

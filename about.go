@@ -10,11 +10,13 @@ import (
 // AboutOption configures the per-type tolerances used by ToBeAbout.
 type AboutOption func(*aboutConfig)
 
+// A nil delta means the option was not given. For time.Time that differs from a delta
+// of 0, since only TimeDelta compares times by instant.
 type aboutConfig struct {
-	floatDelta    float64
-	intDelta      int64
-	timeDelta     time.Duration
-	durationDelta time.Duration
+	floatDelta    *float64
+	intDelta      *int64
+	timeDelta     *time.Duration
+	durationDelta *time.Duration
 }
 
 type aboutWalk struct {
@@ -30,26 +32,31 @@ type visit struct {
 	unexported bool
 }
 
-// FloatDelta sets the maximum allowed absolute difference for float32/float64 leaves.
+// FloatDelta sets the maximum allowed absolute difference for float32 and float64
+// values. NaN never matches, as in ToBe.
 func FloatDelta(d float64) AboutOption {
-	return func(c *aboutConfig) { c.floatDelta = d }
+	return func(c *aboutConfig) { c.floatDelta = &d }
 }
 
-// IntDelta sets the maximum allowed absolute difference for signed and unsigned
-// integer leaves.
+// IntDelta sets the maximum allowed absolute difference for integers of every size:
+// int, int8, int16, int32 (rune), int64, uint, uint8 (byte), uint16, uint32, uint64 and
+// uintptr. Named integer types such as enums get the delta too: with IntDelta(5),
+// time.June matches time.January. The only exception is time.Duration, which uses
+// DurationDelta.
 func IntDelta(d int64) AboutOption {
-	return func(c *aboutConfig) { c.intDelta = d }
+	return func(c *aboutConfig) { c.intDelta = &d }
 }
 
-// TimeDelta sets the maximum allowed absolute difference for time.Time leaves.
-// Times are compared by instant (a.Sub(b)), not field by field.
+// TimeDelta sets the maximum allowed absolute difference for time.Time values. Times
+// are then compared by instant (a.Sub(b)), so location and monotonic clock reading are
+// ignored, even with a delta of 0. Without it, times are compared like ToBe does.
 func TimeDelta(d time.Duration) AboutOption {
-	return func(c *aboutConfig) { c.timeDelta = d }
+	return func(c *aboutConfig) { c.timeDelta = &d }
 }
 
-// DurationDelta sets the maximum allowed absolute difference for time.Duration leaves.
+// DurationDelta sets the maximum allowed absolute difference for time.Duration values.
 func DurationDelta(d time.Duration) AboutOption {
-	return func(c *aboutConfig) { c.durationDelta = d }
+	return func(c *aboutConfig) { c.durationDelta = &d }
 }
 
 var (
@@ -57,13 +64,10 @@ var (
 	durationType = reflect.TypeOf(time.Duration(0))
 )
 
-// ToBeAbout asserts that the value deeply equals expected, like ToBe, except that
-// numeric, time.Time and time.Duration leaves only need to be within the deltas given
-// by the options. Every other leaf and the structural shape must still match exactly.
-// Without options it behaves like an exact match.
-//
-// The deltas apply to the value itself and to exported fields, list items and map
-// values at any depth, also inside unexported fields. Only a leaf that is itself an
+// ToBeAbout asserts that the value deeply equals expected, exactly like ToBe, except
+// that values of a type given as an option only need to be within its delta. Deltas
+// apply to the value itself, to exported fields and to the elements of slices, arrays
+// and maps, at any depth and through pointers and interfaces. Only a value held by an
 // unexported field is compared exactly.
 func (e Val) ToBeAbout(expected interface{}, opts ...AboutOption) Val {
 	e.t.Helper()
@@ -90,9 +94,9 @@ func (e Val) ToBeAbout(expected interface{}, opts ...AboutOption) Val {
 	return e
 }
 
-// compare walks expected (exp) and actual (act) in lock-step and returns a message
-// describing the first difference together with false, or an empty message and true
-// when everything is within tolerance.
+// compare walks expected (exp) and actual (act) in lock-step the way reflect.DeepEqual
+// does and returns a message describing the first difference together with false, or
+// an empty message and true when everything is within tolerance.
 func (w aboutWalk) compare(path string, exp, act reflect.Value, unexported bool) (string, bool) {
 	if exp.Type() != act.Type() {
 		return fmt.Sprintf("expected %s to be of type %v but it is of type %v", path, exp.Type(), act.Type()), false
@@ -104,131 +108,201 @@ func (w aboutWalk) compare(path string, exp, act reflect.Value, unexported bool)
 		return "", true
 	}
 
-	c := w.deltas
-	if unexported {
-		c = aboutConfig{}
-	}
-
-	// time.Time is a struct, so it has to be caught before the struct branch would
-	// recurse into its (unexported, location/monotonic carrying) fields.
-	if exp.Type() == timeType {
-		et := exp.Interface().(time.Time)
-		at := act.Interface().(time.Time)
-		if !withinDelta(absDiffTime(et, at), int64(c.timeDelta)) {
-			return fmt.Sprintf("expected %s to be %s±%v but it is %s", path,
-				et.Format(time.RFC3339Nano), c.timeDelta, at.Format(time.RFC3339Nano)), false
-		}
-
-		return "", true
-	}
-
-	// time.Duration has Kind Int64, so it must be distinguished by type, not by kind,
-	// otherwise the duration delta would leak onto every int64 value.
-	if exp.Type() == durationType {
-		ed, ad := time.Duration(exp.Int()), time.Duration(act.Int())
-		if !withinDelta(absDiffInt64(int64(ed), int64(ad)), int64(c.durationDelta)) {
-			return fmt.Sprintf("expected %s to be %v±%v but it is %v", path, ed, c.durationDelta, ad), false
-		}
-
-		return "", true
-	}
-
 	switch exp.Kind() {
-	case reflect.Float32, reflect.Float64:
-		ef, af := exp.Float(), act.Float()
-		if !withinFloatDelta(ef, af, c.floatDelta) {
-			return fmt.Sprintf("expected %s to be %v±%v but it is %v", path, ef, c.floatDelta, af), false
+	case reflect.Array:
+		return w.compareElements(path, exp, act)
+
+	case reflect.Slice:
+		return w.compareSlice(path, exp, act)
+
+	case reflect.Map:
+		return w.compareMap(path, exp, act)
+
+	case reflect.Interface:
+		if exp.IsNil() != act.IsNil() {
+			return mismatch(path, exp, act, "")
 		}
 
-		return "", true
-
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		ei, ai := exp.Int(), act.Int()
-		if !withinDelta(absDiffInt64(ei, ai), c.intDelta) {
-			return fmt.Sprintf("expected %s to be %v±%v but it is %v", path, ei, c.intDelta, ai), false
-		}
-
-		return "", true
-
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
-		eu, au := exp.Uint(), act.Uint()
-		if !withinDelta(absDiffUint64(eu, au), c.intDelta) {
-			return fmt.Sprintf("expected %s to be %v±%v but it is %v", path, eu, c.intDelta, au), false
-		}
-
-		return "", true
-
-	case reflect.Ptr, reflect.Interface:
-		if exp.IsNil() || act.IsNil() {
-			if exp.IsNil() != act.IsNil() {
-				return fmt.Sprintf("expected %s to be %v but it is %v", path, formatV(exp), formatV(act)), false
-			}
-
+		if exp.IsNil() {
 			return "", true
 		}
 
 		return w.compare(path, exp.Elem(), act.Elem(), unexported)
 
+	case reflect.Ptr:
+		if exp.Pointer() == act.Pointer() {
+			return "", true
+		}
+
+		if exp.IsNil() || act.IsNil() {
+			return mismatch(path, exp, act, "")
+		}
+
+		return w.compare(path, exp.Elem(), act.Elem(), unexported)
+
 	case reflect.Struct:
-		// Interface() refuses values read through unexported fields, but the time and
-		// leaf comparisons need it. Reading such fields through their address avoids
-		// that, and needs an addressable struct.
-		exp, act = addressable(exp), addressable(act)
-
-		for i := 0; i < exp.NumField(); i++ {
-			field := exp.Type().Field(i)
-			ef, af := exp.Field(i), act.Field(i)
-
-			if !field.IsExported() {
-				ef, af = export(ef), export(af)
-			}
-
-			if msg, ok := w.compare(path+"."+field.Name, ef, af, !field.IsExported()); !ok {
-				return msg, false
-			}
+		// time.Time is compared as a whole, not by its unexported fields.
+		if exp.Type() != timeType {
+			return w.compareStruct(path, exp, act)
 		}
+	}
 
-		return "", true
+	if unexported {
+		return compareValue(path, exp, act, aboutConfig{})
+	}
 
-	case reflect.Slice, reflect.Array:
-		if exp.Len() != act.Len() {
-			return fmt.Sprintf("expected %s to have %d elements but it has %d elements", path, exp.Len(), act.Len()), false
-		}
+	return compareValue(path, exp, act, w.deltas)
+}
 
-		for i := 0; i < exp.Len(); i++ {
-			if msg, ok := w.compare(fmt.Sprintf("%s[%d]", path, i), exp.Index(i), act.Index(i), false); !ok {
-				return msg, false
-			}
-		}
+func (w aboutWalk) compareSlice(path string, exp, act reflect.Value) (string, bool) {
+	if exp.IsNil() != act.IsNil() {
+		return mismatch(path, exp, act, "")
+	}
 
-		return "", true
+	if exp.Len() != act.Len() {
+		return fmt.Sprintf("expected %s to have %d elements but it has %d elements", path, exp.Len(), act.Len()), false
+	}
 
-	case reflect.Map:
-		if exp.Len() != act.Len() {
-			return fmt.Sprintf("expected %s to have %d entries but it has %d entries", path, exp.Len(), act.Len()), false
-		}
-
-		iter := exp.MapRange()
-		for iter.Next() {
-			av := act.MapIndex(iter.Key())
-			if !av.IsValid() {
-				return fmt.Sprintf("expected %s to have key %v but it does not", path, formatV(iter.Key())), false
-			}
-
-			if msg, ok := w.compare(fmt.Sprintf("%s[%v]", path, formatV(iter.Key())), iter.Value(), av, false); !ok {
-				return msg, false
-			}
-		}
-
-		return "", true
-
-	default:
-		if !reflect.DeepEqual(exp.Interface(), act.Interface()) {
-			return fmt.Sprintf("expected %s to be %v but it is %v", path, formatV(exp), formatV(act)), false
-		}
-
+	if exp.Pointer() == act.Pointer() {
 		return "", true
 	}
+
+	return w.compareElements(path, exp, act)
+}
+
+func (w aboutWalk) compareElements(path string, exp, act reflect.Value) (string, bool) {
+	for i := 0; i < exp.Len(); i++ {
+		if msg, ok := w.compare(fmt.Sprintf("%s[%d]", path, i), exp.Index(i), act.Index(i), false); !ok {
+			return msg, false
+		}
+	}
+
+	return "", true
+}
+
+func (w aboutWalk) compareMap(path string, exp, act reflect.Value) (string, bool) {
+	if exp.IsNil() != act.IsNil() {
+		return mismatch(path, exp, act, "")
+	}
+
+	if exp.Len() != act.Len() {
+		return fmt.Sprintf("expected %s to have %d entries but it has %d entries", path, exp.Len(), act.Len()), false
+	}
+
+	if exp.Pointer() == act.Pointer() {
+		return "", true
+	}
+
+	iter := exp.MapRange()
+	for iter.Next() {
+		av := act.MapIndex(iter.Key())
+		if !av.IsValid() {
+			return fmt.Sprintf("expected %s to have key %v but it does not", path, formatV(iter.Key())), false
+		}
+
+		if msg, ok := w.compare(fmt.Sprintf("%s[%v]", path, formatV(iter.Key())), iter.Value(), av, false); !ok {
+			return msg, false
+		}
+	}
+
+	return "", true
+}
+
+func (w aboutWalk) compareStruct(path string, exp, act reflect.Value) (string, bool) {
+	// Interface() refuses values read through unexported fields, but the time and
+	// leaf comparisons need it. Reading such fields through their address avoids
+	// that, and needs an addressable struct.
+	exp, act = addressable(exp), addressable(act)
+
+	for i := 0; i < exp.NumField(); i++ {
+		field := exp.Type().Field(i)
+		ef, af := exp.Field(i), act.Field(i)
+
+		if !field.IsExported() {
+			ef, af = export(ef), export(af)
+		}
+
+		if msg, ok := w.compare(path+"."+field.Name, ef, af, !field.IsExported()); !ok {
+			return msg, false
+		}
+	}
+
+	return "", true
+}
+
+// compareValue compares the values compare does not walk into.
+func compareValue(path string, exp, act reflect.Value, deltas aboutConfig) (string, bool) {
+	// time.Duration has Kind Int64, so it must be distinguished by type, not by kind,
+	// otherwise the int delta would apply to durations.
+	switch exp.Type() {
+	case timeType:
+		return compareTime(path, exp, act, deltas.timeDelta)
+	case durationType:
+		return withinDelta(path, exp, act, absDiffInt64(exp.Int(), act.Int()), deltas.durationDelta)
+	}
+
+	switch exp.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return withinDelta(path, exp, act, absDiffInt64(exp.Int(), act.Int()), deltas.intDelta)
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		return withinDelta(path, exp, act, absDiffUint64(exp.Uint(), act.Uint()), deltas.intDelta)
+	case reflect.Float32, reflect.Float64:
+		return withinFloatDelta(path, exp, act, deltas.floatDelta)
+	}
+
+	if !reflect.DeepEqual(exp.Interface(), act.Interface()) {
+		return mismatch(path, exp, act, "")
+	}
+
+	return "", true
+}
+
+func compareTime(path string, exp, act reflect.Value, delta *time.Duration) (string, bool) {
+	et, at := exp.Interface().(time.Time), act.Interface().(time.Time)
+
+	if delta != nil {
+		return withinDelta(path, exp, act, absDiffTime(et, at), delta)
+	}
+
+	if reflect.DeepEqual(et, at) {
+		return "", true
+	}
+
+	msg, _ := mismatch(path, exp, act, "")
+	if et.Equal(at) {
+		msg += " (same instant, TimeDelta would ignore location and monotonic clock)"
+	}
+
+	return msg, false
+}
+
+func withinDelta[D ~int64](path string, exp, act reflect.Value, diff uint64, delta *D) (string, bool) {
+	if diff == 0 || (delta != nil && *delta >= 0 && diff <= uint64(*delta)) {
+		return "", true
+	}
+
+	return mismatch(path, exp, act, formatDelta(delta))
+}
+
+func withinFloatDelta(path string, exp, act reflect.Value, delta *float64) (string, bool) {
+	// Inf-Inf is NaN, so equal infinities need the explicit equality check.
+	if ef, af := exp.Float(), act.Float(); ef == af || (delta != nil && math.Abs(af-ef) <= *delta) {
+		return "", true
+	}
+
+	return mismatch(path, exp, act, formatDelta(delta))
+}
+
+func mismatch(path string, exp, act reflect.Value, delta string) (string, bool) {
+	return fmt.Sprintf("expected %s to be %s%s but it is %s", path, formatV(exp), delta, formatV(act)), false
+}
+
+func formatDelta[D ~float64 | ~int64](delta *D) string {
+	if delta == nil {
+		return ""
+	}
+
+	return fmt.Sprintf("±%v", *delta)
 }
 
 func (w aboutWalk) revisited(exp, act reflect.Value, unexported bool) bool {
@@ -269,28 +343,20 @@ func export(v reflect.Value) reflect.Value {
 }
 
 func formatV(v reflect.Value) string {
-	if v.Kind() == reflect.String {
+	if v.Type() == timeType {
+		return v.Interface().(time.Time).Format(time.RFC3339Nano)
+	}
+
+	switch v.Kind() {
+	case reflect.String:
 		return "'" + v.String() + "'"
+	case reflect.Ptr, reflect.Interface, reflect.Map, reflect.Slice, reflect.Func, reflect.Chan:
+		if v.IsNil() {
+			return "nil"
+		}
 	}
 
 	return fmt.Sprintf("%v", v)
-}
-
-func withinFloatDelta(exp, act, delta float64) bool {
-	// Inf-Inf is NaN, so equal infinities need the explicit equality check.
-	if exp == act || (math.IsNaN(exp) && math.IsNaN(act)) {
-		return true
-	}
-
-	return math.Abs(act-exp) <= delta
-}
-
-func withinDelta(diff uint64, delta int64) bool {
-	if delta < 0 {
-		delta = 0
-	}
-
-	return diff <= uint64(delta)
 }
 
 func absDiffTime(a, b time.Time) uint64 {
