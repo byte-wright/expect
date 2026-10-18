@@ -143,6 +143,13 @@ func TestFailToBeAboutNegativeDelta(t *testing.T) {
 	l.ExpectMessage(0).ToBe("expected count to be 100±-1 but it is 5")
 }
 
+func TestFailToBeAboutUintptr(t *testing.T) {
+	l := test.New(t, func(t expect.Test) {
+		expect.Value(t, "handle", uintptr(4)).ToBeAbout(uintptr(3), expect.IntDelta(5))
+	})
+	l.ExpectMessage(0).ToBe("expected handle to be 3 but it is 4")
+}
+
 func TestFailToBeAboutString(t *testing.T) {
 	want := measurement{Name: "tank", Ratio: 0.5}
 	got := measurement{Name: "barrel", Ratio: 0.5}

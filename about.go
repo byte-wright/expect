@@ -39,10 +39,10 @@ func FloatDelta(d float64) AboutOption {
 }
 
 // IntDelta sets the maximum allowed absolute difference for integers of every size:
-// int, int8, int16, int32 (rune), int64, uint, uint8 (byte), uint16, uint32, uint64 and
-// uintptr. Named integer types such as enums get the delta too: with IntDelta(5),
-// time.June matches time.January. The only exception is time.Duration, which uses
-// DurationDelta.
+// int, int8, int16, int32 (rune), int64, uint, uint8 (byte), uint16, uint32 and uint64.
+// Named integer types such as enums get the delta too: with IntDelta(5), time.June
+// matches time.January. The exceptions are time.Duration, which uses DurationDelta, and
+// uintptr, which is compared exactly since it holds addresses and handles.
 func IntDelta(d int64) AboutOption {
 	return func(c *aboutConfig) { c.intDelta = &d }
 }
@@ -244,7 +244,7 @@ func compareValue(path string, exp, act reflect.Value, deltas aboutConfig) (stri
 	switch exp.Kind() {
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 		return withinDelta(path, exp, act, absDiffInt64(exp.Int(), act.Int()), deltas.intDelta)
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 		return withinDelta(path, exp, act, absDiffUint64(exp.Uint(), act.Uint()), deltas.intDelta)
 	case reflect.Float32, reflect.Float64:
 		return withinFloatDelta(path, exp, act, deltas.floatDelta)

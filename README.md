@@ -101,10 +101,10 @@ compared exactly, like map keys and every type without an option.
 - `FloatDelta` sets the maximum allowed absolute difference for float32 and float64 values.
   NaN never matches, as in `ToBe`.
 - `IntDelta` sets the maximum allowed absolute difference for integers of every size: int,
-  int8, int16, int32 (rune), int64, uint, uint8 (byte), uint16, uint32, uint64 and uintptr.
-  Named integer types such as enums get the delta too: with `IntDelta(5)`, `time.June`
-  matches `time.January`. The only exception is `time.Duration`, which uses
-  `DurationDelta`.
+  int8, int16, int32 (rune), int64, uint, uint8 (byte), uint16, uint32 and uint64. Named
+  integer types such as enums get the delta too: with `IntDelta(5)`, `time.June` matches
+  `time.January`. The exceptions are `time.Duration`, which uses `DurationDelta`, and
+  `uintptr`, which is compared exactly since it holds addresses and handles.
 - `TimeDelta` sets the maximum allowed absolute difference for time.Time values. Times are
   then compared by instant (`a.Sub(b)`), so location and monotonic clock reading are
   ignored, even with a delta of 0. Without it, times are compared like `ToBe` does.
